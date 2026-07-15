@@ -608,6 +608,16 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
     int iy = floor((pos[index].y - gridMin.y) * inverseCellWidth);
     int iz = floor((pos[index].z - gridMin.z) * inverseCellWidth);
 
+    glm::vec3 gridPos = pos[index] - gridMin * inverseCellWidth;
+
+    // check which octant the point is in for 8 cell check
+    int octant_ix = (gridPos.x - ix < 0.5) ? -1 : 1;
+    int octant_iy = (gridPos.y - iy < 0.5) ? -1 : 1;
+    int octant_iz = (gridPos.z - iz < 0.5) ? -1 : 1;
+    float distRule = fmaxf(rule1Distance, fmaxf(rule2Distance, rule3Distance));
+    bool use8cells = (cellWidth > 2 * distRule) ? true : false;
+       
+    int loopStart = use8cells ? 0 : -1;
 
     glm::vec3 currPos = pos[index];
     glm::vec3 outVel2 = { 0,0,0 };
@@ -616,14 +626,20 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
     int numNeighbors1 = 0;
     int numNeighbors3 = 0;
 
-    for (int z = -1; z <= 1; z++) {
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
+    for (int z = loopStart; z <= 1; z++) {
+        for (int y = loopStart; y <= 1; y++) {
+            for (int x = loopStart; x <= 1; x++) {
 
-                if (ix + x < 0 || ix + x >= gridResolution) continue;
-                if (iy + y < 0 || iy + y >= gridResolution) continue;
-                if (iz + z < 0 || iz + z >= gridResolution) continue;
-                int neighborCellIdx = gridIndex3Dto1D(ix + x, iy + y, iz + z, gridResolution);
+
+
+                int neighborX = ix + (use8cells ? (x * octant_ix) : x);
+                int neighborY = iy + (use8cells ? (y * octant_iy) : y);
+                int neighborZ = iz + (use8cells ? (z * octant_iz) : z);
+
+                if (neighborX  < 0 || neighborX >= gridResolution) continue;
+                if (neighborY < 0 || neighborY >= gridResolution) continue;
+                if (neighborZ < 0 || neighborZ >= gridResolution) continue;
+                int neighborCellIdx = gridIndex3Dto1D(neighborX, neighborY, neighborZ, gridResolution);
 
                 if (neighborCellIdx < 0) continue;
 
@@ -631,19 +647,20 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
                 int endIdx = gridCellEndIndices[neighborCellIdx];
                 if (startIdx == -1) continue;
 
-
-
                 for (int neighborBoidIdx = startIdx; neighborBoidIdx <= endIdx; neighborBoidIdx++) {
-                    //int neighborBoidIdx = particleArrayIndices[i];
                     if (neighborBoidIdx < 0 || neighborBoidIdx >= N) continue;
                     glm::vec3 neighborPos = pos[neighborBoidIdx];
 
-
+                    
+                    // If the cell width is double the neighborhood distance
+                    // each boid only has to be checked against other boids in 8 cells
+                    float dist = glm::length(pos[neighborBoidIdx] - pos[index]);
+                    
                     if (neighborBoidIdx >= 0 && neighborBoidIdx < N) {
 
 
                         if (neighborBoidIdx != index) {
-                            float dist = glm::length(pos[neighborBoidIdx] - pos[index]);
+                            
 
                             if (dist < rule1Distance) {
                                 perceivedCenter1 += neighborPos;
@@ -660,10 +677,13 @@ __global__ void kernUpdateVelNeighborSearchCoherent(
                             }
                         }
                     }
+
                 }
 
             }
+
         }
+
     }
 
     glm::vec3 result(0.f);
@@ -926,12 +946,12 @@ void Boids::unitTest() {
   checkCUDAErrorWithLine("cudaMalloc dev_intValues failed!");
 
   dim3 fullBlocksPerGrid((N + blockSize - 1) / blockSize);
-
+  /*
   std::cout << "before unstable sort: " << std::endl;
   for (int i = 0; i < N; i++) {
     std::cout << "  key: " << intKeys[i];
     std::cout << " value: " << intValues[i] << std::endl;
-  }
+  }*/
 
   // How to copy data to the GPU
   cudaMemcpy(dev_intKeys, intKeys.get(), sizeof(int) * N, cudaMemcpyHostToDevice);
@@ -948,11 +968,13 @@ void Boids::unitTest() {
   cudaMemcpy(intValues.get(), dev_intValues, sizeof(int) * N, cudaMemcpyDeviceToHost);
   checkCUDAErrorWithLine("memcpy back failed!");
 
+  /*
   std::cout << "after unstable sort: " << std::endl;
   for (int i = 0; i < N; i++) {
     std::cout << "  key: " << intKeys[i];
     std::cout << " value: " << intValues[i] << std::endl;
   }
+  */
 
   // cleanup
   cudaFree(dev_intKeys);
